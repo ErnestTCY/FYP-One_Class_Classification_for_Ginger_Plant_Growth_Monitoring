@@ -133,9 +133,11 @@ def _build_and_send_week_pdf(sid: int, week: int):
     reports_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = reports_dir / f"session_{sid}_week_{week}.pdf"
 
-    # Use your actual week-report builder here
-    # make_week_report(str(pdf_path), sess, dets, title=f"Week {week} Report")
-    make_report(str(pdf_path), sess, dets, None, artifacts_root=".")
+    # Use our rich builder (includes per-detection reasoning if present + Gemini summary)
+    pdf_bytes, _fname = _build_detections_report_pdf(
+        sess, dets, title=f"Week {week} Report", group_by=None
+    )
+    pdf_path.write_bytes(pdf_bytes)
 
     if not pdf_path.exists():
         abort(500, "Report was not created")
@@ -299,26 +301,33 @@ def _group_detections(detections, group_by):
 def _build_detections_report_pdf(sess, detections, title="Detection Report", group_by=None):
     """
     Builds a PDF with:
-      - A summary (counts + defect rate + short synthesized reasoning roll-up).
-      - Session report: grouped by week, shows ALL images in that week (no per-detection reasoning block).
-      - Weekly report: shows ALL detections in that week; includes each detection's reasoning if present.
+      - A summary (counts + defect rate + Gemini or roll-up summary).
+      - Session report (group_by == "week"): under each Week N, show ALL images in that week,
+        including each detection's reasoning if present.
+      - Weekly report (group_by is None): show ALL detections in the week with their reasoning if present.
     """
+    import io, os, json, textwrap
+    from datetime import datetime
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
     from reportlab.lib import colors
-    import io, os
 
-    # ---------- helpers ----------
+    # ---------- small helpers ----------
     def _fs(relpath: str):
+        """Resolve a relative path to a real file on disk, trying a few common bases."""
         if not relpath:
             return None
         relpath = relpath.replace("\\", "/")
-        # try as-is from project root
-        p0 = os.path.join(app.root_path, relpath)
+        # try relative to Flask app root
+        try:
+            root = app.root_path  # noqa: F821 (defined in the module)
+        except Exception:
+            root = "."
+        p0 = os.path.join(root, relpath)
         if os.path.exists(p0):
             return p0
         # common fallbacks
-        for base in (".", "uploads", "results", "artifacts", os.path.join(app.root_path, "static")):
+        for base in (".", "uploads", "results", "artifacts", os.path.join(root, "static")):
             p = os.path.join(base, relpath)
             if os.path.exists(p):
                 return p
@@ -351,64 +360,80 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
         return txt or None
 
     # ---------- plant-level counts & defect rate ----------
-    # Sum across detections using existing helpers (_counts_from_row / _hist_from_rows)
-    labels = ["Normal plant", "Abnormal plant", "Empty Bag Detected"]
-    counts = _hist_from_rows(detections)
+    # Expecting _hist_from_rows to exist in this module; returns [normal, abnormal, empty]
+    counts = _hist_from_rows(detections)  # noqa: F821
     normal_total, abnormal_total, empty_total = counts
     denom = max(1, normal_total + abnormal_total)  # plant-only
     defect_rate = (abnormal_total / denom) * 100.0
 
-    # Build a compact reasoning roll-up from per-detection reasonings (if any)
+    # ---------- reasoning roll-up (fallback if Gemini not available) ----------
     reason_lines = []
     for d in detections:
         rtxt = _reasoning_text(d)
         if not rtxt:
             continue
-        # Take first sentence-ish (keep concise)
         first = rtxt.split("\n", 1)[0]
         if len(first) > 220:
             first = first[:217] + "…"
         reason_lines.append(f"• Det #{getattr(d, 'id', '?')}: {first}")
-        if len(reason_lines) >= 15:  # avoid an overly long header block
+        if len(reason_lines) >= 15:
             reason_lines.append("• …")
             break
     rollup = "\n".join(reason_lines) if reason_lines else "No per-plant reasoning available in this scope."
 
-    # Also try Gemini synthesis (non-fatal if not configured)
+    # ---------- try Gemini summary (safe fallback to rollup) ----------
     gem_summary = None
     try:
-        scope_label = "Session" if "Session" in title else title
-        gem_summary = _build_overall_gemini_summary(sess, detections, scope_label=scope_label) or None
+        scope_label = "Session" if (group_by == "week" or "Session" in (title or "")) else (title or "Report")
+        # expecting _build_overall_gemini_summary in module; non-fatal if missing/unconfigured
+        gem_summary = _build_overall_gemini_summary(sess, detections, scope_label=scope_label)  # noqa: F821
+        if gem_summary:
+            gem_summary = gem_summary.strip()
     except Exception:
         gem_summary = None
 
-    # ---------- canvas ----------
+    # ---------- init canvas ----------
     buf = io.BytesIO()
     W, H = A4
     c = canvas.Canvas(buf, pagesize=A4)
 
     # Title
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(30, H - 50, title)
+    c.drawString(30, H - 50, title or "Report")
     y = H - 80
 
-    # Session meta
+    # Session meta (best-effort)
     if sess:
         c.setFont("Helvetica", 10)
-        c.drawString(30, y, f"Session ID: {getattr(sess, 'id', 'N/A')}  |  Name: {getattr(sess, 'name', 'N/A')}  |  Phase: {getattr(sess, 'current_phase', None) or getattr(sess, 'phase', 'N/A')}")
+        sid = getattr(sess, "id", "N/A")
+        sname = getattr(sess, "name", None) or getattr(sess, "title", None) or "N/A"
+        sphase = getattr(sess, "current_phase", None) or getattr(sess, "phase", None) or "N/A"
+        c.drawString(30, y, f"Session ID: {sid}  |  Name: {sname}  |  Phase: {sphase}")
         y -= 14
-        c.drawString(30, y, f"Started: {getattr(sess, 'started_at', 'N/A')}")
+        started_at = getattr(sess, "started_at", None)
+        c.drawString(30, y, f"Started: {started_at if started_at else 'N/A'}")
         y -= 18
 
-    # Summary box
-    box_x, box_w, box_h = 30, W - 60, 130
+    # ---------- Summary box (auto height; Gemini/roll-up directly below defect rate) ----------
+    summary_text = gem_summary or rollup
+    wrapped = _wrap(summary_text, width=100)
+
+    # Base area for counts + header; then add body height per line (~11px)
+    base_h = 88  # title + 4 lines (3 counts + rate)
+    lines_h = min(600, 11 * max(1, len(wrapped)))
+    box_x, box_w = 30, W - 60
+    box_h = base_h + lines_h
     box_y = y - box_h
+
     c.setFillColorRGB(0.93, 0.98, 0.93)
     c.roundRect(box_x, box_y, box_w, box_h, radius=10, stroke=0, fill=1)
+
+    # Header
     c.setFillColorRGB(0, 0.45, 0)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(box_x + 10, box_y + box_h - 20, "Summary (plant-level)")
 
+    # Counts + defect rate
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 10)
     c.drawString(box_x + 10, box_y + box_h - 38, f"Normal plants: {normal_total}")
@@ -416,55 +441,86 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
     c.drawString(box_x + 10, box_y + box_h - 66, f"Empty bags: {empty_total}")
     c.drawString(box_x + 10, box_y + box_h - 80, f"Defect rate (Abnormal/(Normal+Abnormal)): {defect_rate:.2f}%")
 
-    # Reasoning roll-up (from all plants in scope)
+    # Gemini / roll-up paragraph — appears right *below* the defect rate
     c.setFont("Helvetica-Oblique", 9)
     ry = box_y + box_h - 96
-    for line in _wrap(gem_summary or rollup, width=100):
+    for line in wrapped:
         c.drawString(box_x + 10, ry, line)
         ry -= 11
-        if ry < box_y + 8:
+        if ry < box_y + 10:
             break
 
     y = box_y - 24
 
-    # ---------- layout per scope ----------
+    # ---------- Layout: Session vs Weekly ----------
+    # Common card layout knobs (smaller image, more room for text)
+    IMG_W, IMG_H = 140, 105
+    LEFT_X = 30
+    RIGHT_X = 180
+    CARD_DROP = 200  # extra vertical space per detection block
+
     if group_by == "week":
-        # SESSION REPORT: group all detections by numeric week
+        # SESSION REPORT: group by numeric week; include per-detection reasoning
         groups = {}
         for d in detections:
             wk = getattr(d, "week", None)
-            key = int(wk) if (isinstance(wk, int) or str(wk).isdigit()) else -1
+            try:
+                key = int(wk) if wk is not None else -1
+            except Exception:
+                key = -1
             groups.setdefault(key, []).append(d)
+
         for wk in sorted(groups.keys()):
             c.setFont("Helvetica-Bold", 13)
-            c.drawString(30, y, f"Week {wk}")
+            c.drawString(LEFT_X, y, f"Week {wk}")
             y -= 18
             c.setFont("Helvetica", 9)
             c.setFillColor(colors.gray)
-            c.drawString(30, y, "(All images in this week)")
+            c.drawString(LEFT_X, y, "(All images in this week)")
             c.setFillColor(colors.black)
             y -= 10
 
             for d in groups[wk]:
                 img_rel = getattr(d, "annotated_path", None) or getattr(d, "image_path", None)
                 img_fs = _fs(img_rel)
-                # left: image
+
+                # Left: image (smaller to free right column)
                 if img_fs:
                     try:
-                        c.drawImage(img_fs, 30, y - 150, width=160, height=120, preserveAspectRatio=True, anchor='sw')
+                        c.drawImage(img_fs, LEFT_X, y - (IMG_H + 75), width=IMG_W, height=IMG_H,
+                                    preserveAspectRatio=True, anchor='sw')
                     except Exception:
                         pass
-                # right: meta (no per-detection reasoning in session scope)
-                c.setFont("Helvetica-Bold", 10)
-                c.drawString(200, y - 10, f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
-                c.setFont("Helvetica", 9)
-                c.drawString(200, y - 24, f"Time: {_safe_ts(d)}")
-                # weather line if present
-                wline = _format_weather_line(d)
-                if wline and wline != "—":
-                    c.drawString(200, y - 38, f"Weather: {wline}")
 
-                y -= 160
+                # Right: meta + (now) reasoning if present
+                c.setFont("Helvetica-Bold", 10)
+                c.drawString(RIGHT_X, y - 10,
+                             f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
+                c.setFont("Helvetica", 9)
+                c.drawString(RIGHT_X, y - 24, f"Time: {_safe_ts(d)}")
+
+                wline = _format_weather_line(d)  # noqa: F821
+                if wline and wline != "—":
+                    c.drawString(RIGHT_X, y - 38, f"Weather: {wline}")
+
+                # Per-detection reasoning (SESSION scope now includes it)
+                rtxt = _reasoning_text(d)
+                if rtxt:
+                    c.setFont("Helvetica-Oblique", 8)
+                    ry = y - 56
+                    for line in _wrap(rtxt, width=110):
+                        c.drawString(RIGHT_X, ry, line)
+                        ry -= 10
+                        if ry < 80:
+                            # New page for long reasoning blocks
+                            c.showPage(); y = H - 60
+                            c.setFont("Helvetica-Oblique", 8)
+                            c.drawString(LEFT_X, y, f"(continued — Week {wk})")
+                            y -= 18
+                            ry = y - 56
+
+                # Drop down to the next "card"
+                y -= CARD_DROP
                 if y < 160:
                     c.showPage(); y = H - 60
 
@@ -473,57 +529,68 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
                 c.showPage(); y = H - 60
 
     else:
-        # WEEKLY REPORT (or ungrouped): all detections in this scope
+        # WEEKLY (or ungrouped) REPORT: show all detections with per-detection reasoning if present
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(30, y, "Detections")
+        c.drawString(LEFT_X, y, "Detections")
         y -= 18
 
         for d in detections:
             img_rel = getattr(d, "annotated_path", None) or getattr(d, "image_path", None)
             img_fs = _fs(img_rel)
 
-            # left: image
+            # Left: image (smaller)
             if img_fs:
                 try:
-                    c.drawImage(img_fs, 30, y - 150, width=160, height=120, preserveAspectRatio=True, anchor='sw')
+                    c.drawImage(img_fs, LEFT_X, y - (IMG_H + 75), width=IMG_W, height=IMG_H,
+                                preserveAspectRatio=True, anchor='sw')
                 except Exception:
                     pass
 
-            # right: meta
+            # Right: meta
             c.setFont("Helvetica-Bold", 10)
-            c.drawString(200, y - 10, f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
+            c.drawString(RIGHT_X, y - 10,
+                         f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
             c.setFont("Helvetica", 9)
-            c.drawString(200, y - 24, f"Time: {_safe_ts(d)}")
-            wline = _format_weather_line(d)
+            c.drawString(RIGHT_X, y - 24, f"Time: {_safe_ts(d)}")
+            wline = _format_weather_line(d)  # noqa: F821
             if wline and wline != "—":
-                c.drawString(200, y - 38, f"Weather: {wline}")
+                c.drawString(RIGHT_X, y - 38, f"Weather: {wline}")
 
-            # per-detection reasoning — ONLY if present
+            # Per-detection reasoning — ONLY if present
             rtxt = _reasoning_text(d)
             if rtxt:
                 c.setFont("Helvetica-Oblique", 8)
                 ry = y - 56
-                for line in _wrap(rtxt, width=85):
-                    c.drawString(200, ry, line)
+                for line in _wrap(rtxt, width=110):
+                    c.drawString(RIGHT_X, ry, line)
                     ry -= 10
+                    if ry < 80:
+                        c.showPage(); y = H - 60
+                        c.setFont("Helvetica-Oblique", 8)
+                        c.drawString(LEFT_X, y, "(continued)")
+                        y -= 18
+                        ry = y - 56
 
-            y -= 160
+            # Next detection "card"
+            y -= CARD_DROP
             if y < 160:
                 c.showPage(); y = H - 60
 
-    # finalize
+    # ---------- finalize ----------
     c.save()
     pdf_bytes = buf.getvalue()
     buf.close()
 
-    # filename
-    if "Week" in title:
-        fname = f"report_weekly_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
-    elif "Session" in title:
+    # Filename
+    if group_by == "week" or "Session" in (title or ""):
         fname = f"report_session_{getattr(sess, 'id', 'na')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+    elif "Week" in (title or ""):
+        fname = f"report_weekly_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
     else:
         fname = f"report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+
     return pdf_bytes, fname
+
 
 
 
