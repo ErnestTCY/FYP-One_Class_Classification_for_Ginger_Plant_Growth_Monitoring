@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="mb-3">Ginger Detection #{{ d.id }}</h2>
+
+<div class="row g-3">
+
+  <!-- LEFT: image + meta + LLM -->
+  <div class="col-lg-7">
+    <!-- Image + meta -->
+    <div class="card h-80">
+      {% set imgpath = d.annotated_path or d.image_path %}
+      {% set imgurl  = backend ~ '/files/' ~ imgpath %}
+      <img class="card-img-top" src="{{ imgurl }}" alt="">
+      <div class="card-body">
+        <div class="fw-semibold">{{ d.verdict }} — {{ d.phase }}</div>
+        <div class="text-secondary small">{{ d.ts }}</div>
+        {% if d.session_id %}<div class="small">Session #{{ d.session_id }}</div>{% endif %}
+       
+      </div>
+    </div>
+
+    <!-- LLM Reasoning -->
+    <div class="card h-100 mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>LLM Reasoning</span>
+    <button id="gen-btn" class="btn btn-primary btn-sm">Generate LLM Reasoning</button>
+  </div>
+
+  <div class="card-body">
+    <div id="gen-hint" class="small text-secondary mb-2">
+      Uses Gemini 1.5 Flash; saved with this detection until you generate again.
+    </div>
+
+    <textarea id="reasoning" class="form-control" rows="8" readonly
+      placeholder="No reasoning yet. Click the button to generate.">
+{{ d.details.get('reasoning_text','') if d.details else '' }}</textarea>
+  </div>
+</div>
+
+  </div>
+
+  <!-- RIGHT: histogram (top) + weather (bottom) -->
+  <div class="col-lg-5">
+    <!-- Histogram -->
+    <div class="card h-80">
+      <div class="card-header">Detection Histogram</div>
+      <div class="card-body">
+        <canvas id="detHist" height="200"></canvas>
+      </div>
+    </div>
+
+    <!-- Weather card -->
+    {% if d.wx_summary is defined or d.wx_temp_c is defined or d.wx_humidity is defined %}
+    <div class="card mt-3">
+      <div class="card-header">Weather at Capture</div>
+      <div class="card-body">
+        <div class="row g-3 text-center align-items-end">
+          <div class="col-12">
+            <div class="fs-5">{{ d.wx_summary if d.wx_summary is defined else '—' }}</div>
+          </div>
+
+          <div class="col">
+            <div class="small">Temp</div>
+            <div class="fs-5">
+              {% if d.wx_temp_c is defined and d.wx_temp_c is not none %}
+                {{ '%.1f'|format(d.wx_temp_c) }}°C
+              {% else %}—{% endif %}
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="small">Humidity</div>
+            <div class="fs-5">
+              {% if d.wx_humidity is defined and d.wx_humidity is not none %}
+                {{ d.wx_humidity }}%
+              {% else %}—{% endif %}
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="small">Rain (1h)</div>
+            <div class="fs-5">
+              {% if d.wx_rain_1h_mm is defined and d.wx_rain_1h_mm is not none %}
+                {{ d.wx_rain_1h_mm }} mm
+              {% else %}0 mm{% endif %}
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="small">Wind</div>
+            <div class="fs-5">
+              {% if d.wx_wind_kmh is defined and d.wx_wind_kmh is not none %}
+                {{ d.wx_wind_kmh|round(0) }} km/h
+              {% else %}—{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+(function() {
+  // Histogram for this detection
+  fetch("{{ backend }}/api/detections/{{ d.id }}/hist")
+    .then(r => r.json()).then(j => {
+      if (!j.ok) return;
+      const ctx = document.getElementById('detHist').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: j.labels,
+          datasets: [{
+            data: j.counts,
+            backgroundColor: ['rgba(13,110,253,0.35)','rgba(220,53,69,0.35)','rgba(253,126,20,0.35)'],
+            borderColor:   ['#0d6efd','#dc3545','#fd7e14'],
+            borderWidth: 1
+          }]
+        },
+        options: { responsive:true, plugins:{legend:{display:false}},
+                   scales:{y:{beginAtZero:true, precision:0}} }
+      });
+    });
+
+  // Generate LLM reasoning (saves to detection.details.reasoning_text)
+  const btn = document.getElementById('gen-btn');
+  const ta  = document.getElementById('reasoning');
+  const hint= document.getElementById('gen-hint');
+  btn?.addEventListener('click', async () => {
+    btn.disabled = true;
+    const old = ta.value.trim();
+    hint.textContent = 'Generating…';
+    try {
+      const res = await fetch("{{ backend }}/api/detections/{{ d.id }}/gen_reason", { method: 'POST' });
+      const j   = await res.json();
+      if (!res.ok || j.ok === false) throw new Error(j.message || 'Generation failed');
+      ta.value = j.text || '';
+      hint.textContent = 'Saved.';
+    } catch (e) {
+      hint.textContent = 'Failed to generate. ' + (e.message || '');
+      if (!old) ta.value = '';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

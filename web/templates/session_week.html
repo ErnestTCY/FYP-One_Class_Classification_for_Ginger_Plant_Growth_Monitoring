@@ -1,0 +1,222 @@
+{% extends 'base.html' %}
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Session #{{ sid }} — Week {{ week }}</h2>
+    <div class="text-secondary small">Week start: {{ week_start }}</div>
+
+    <div class="btn-group">
+      <form method="get" >
+        <button class="btn btn-primary" onclick="window.open('{{ backend }}/api/sessions/{{ sid }}/weeks/{{ week }}/report', '_blank')">Generate Weekly PDF</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Bulk Add Images</div>
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data" action="{{ url_for('session_week_bulk', sid=sid, week=week) }}" class="row g-2">
+        <div class="col-md-5">
+          <input type="file" name="images" accept="image/*" multiple required class="form-control" />
+        </div>
+
+        <div class="col-md-4 d-flex align-items-center">
+          <label for="day" class="form-label mb-0 me-2">Day:</label>
+
+          <select name="day" class="form-select">
+            <option value="">Use upload day</option>
+            <option value="1">Monday</option>
+            <option value="2">Tuesday</option>
+            <option value="3">Wednesday</option>
+            <option value="4">Thursday</option>
+            <option value="5">Friday</option>
+            <option value="6">Saturday</option>
+            <option value="7">Sunday</option>
+          </select>
+        </div> <!-- ✅ properly closed -->
+
+        <div class="col-md-3">
+          <button class="btn btn-success">Upload & Process</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- right: NEW histogram card -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header">Week Histogram</div>
+      <div class="card-body">
+        <canvas id="weekHist" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="mt-4">Detections</h3>
+
+  <div class="accordion" id="accDays">
+    {% for day in days %}
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="h{{ loop.index }}">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ loop.index }}">
+            {{ day.name }} — {{ day.date }}
+            <span class="badge text-bg-primary ms-2">{{ day.count }}</span>
+          </button>
+        </h2>
+        <div id="c{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#accDays">
+          <div class="accordion-body">
+            {% if day['items']|length == 0 %}
+              <div class="text-secondary">No detections.</div>
+            {% else %}
+              <div class="row g-3">
+                {% for d in day['items'] %}
+                  <div class="col-md-6 col-lg-4">
+                    <div class="card h-100">
+                      {% set imgpath = d.annotated_path or d.image_path %}
+                      {% set imgurl = backend ~ '/files/' ~ imgpath %}
+                      <img src="{{ imgurl }}" class="card-img-top thumb" alt="" />
+                      <div class="card-body">
+                        <div class="fw-semibold">{{ d.verdict }} — {{ d.phase }}</div>
+                        <div class="small text-secondary">{{ d.ts }}</div>
+                      </div>
+                      <div class="card-footer d-flex justify-content-between">
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('ginger_detail', det_id=d.id) }}">Open detail</a>
+                        <form method="post" action="{{ url_for('ui_delete_detection_in_week', sid=sid, week=week, det_id=d.id) }}" onsubmit="return confirm('Delete this detection?')">
+                          <button class="btn btn-sm btn-outline-danger">Delete</button>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <br />
+  <div class="row g-3">
+    {% set files_base = backend ~ '/files/' %}
+    {% for d in dets %}
+      {% set imgpath = d.annotated_path or d.image_path %}
+      {% set imgurl = backend ~ '/files/' ~ imgpath %}
+      <div class="col-sm-6 col-md-4 col-xl-3">
+        <div class="card h-100">
+          <!-- click image to enlarge modal -->
+          <a href="javascript:void(0)" class="text-decoration-none" data-bs-toggle="modal" data-bs-target="#imgModal" data-img="{{ imgurl }}"><img class="card-img-top thumb" src="{{ imgurl }}" alt="" /></a>
+
+          <div class="card-body">
+            <div class="fw-semibold">{{ d.verdict }}</div>
+            <div class="small text-secondary">Week {{ d.week }} — {{ d.ts }}</div>
+            <div class="mt-2 d-grid">
+              <a href="{{ url_for('ginger_detail', det_id=d.id) }}" class="btn btn-outline-primary btn-sm">Open detail</a>
+              <div class="d-flex justify-content-between align-items-center mt-2">
+                <form method="post" action="{{ url_for('ui_delete_detection_in_week', sid=sid, week=week, det_id=d.id) }}" onsubmit="return confirm('Delete this detection?');">
+                  <button class="btn btn-outline-danger btn-sm" type="submit">Delete</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <div class="col-12">
+        <div class="alert alert-secondary mb-0">No detections for this week yet.</div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- one Bootstrap image modal -->
+  <div class="modal fade" id="imgModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+      <div class="modal-content bg-dark">
+        <div class="modal-body p-0">
+          <img id="imgModalPic" class="w-100" src="" alt="" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+  const API   = "{{ backend }}";
+  const sid   = {{ sid }};
+  const files = document.getElementById('bulk-files');
+  const btn   = document.getElementById('bulk-upload');
+  const wkInp = document.getElementById('bulk-week');
+  const daySel= document.getElementById('bulk-day');
+
+  btn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const week = parseInt(wkInp.value, 10);
+    const day  = parseInt(daySel.value, 10);
+
+    if (!files.files.length) { alert('Choose files first'); return; }
+    if (!week || week < 1)   { alert('Enter a valid week'); return; }
+
+    const fd = new FormData();
+    for (const f of files.files) fd.append('images', f);
+    if (day >= 1 && day <= 7) fd.append('day', String(day));
+
+    btn.disabled = true;
+
+    try {
+      // NOTE: the path includes the selected week
+      const res = await fetch(`${API}/api/sessions/${sid}/weeks/${week}/bulk`, {
+        method: 'POST',
+        body: fd
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) throw new Error(j.message || `HTTP ${res.status}`);
+
+      // Optional: if the user uploaded to a different week than the page,
+      // take them to that week’s page so they can see the new detections.
+      if (week !== {{ week }}) {
+        window.location.href = "{{ url_for('session_week', sid=sid, week=0) }}".replace(/0$/, String(week));
+      } else {
+        location.reload();
+      }
+    } catch (err) {
+      alert('Upload failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+    document.addEventListener('click', function (e) {
+      const a = e.target.closest('[data-img]')
+      if (!a) return
+      document.getElementById('imgModalPic').src = a.getAttribute('data-img')
+    })
+    ;(function () {
+      const url = '{{ backend }}/api/sessions/{{ sid }}/weeks/{{ week }}/hist'
+      fetch(url)
+        .then((r) => r.json())
+        .then((j) => {
+          if (!j.ok) return
+          const ctx = document.getElementById('weekHist').getContext('2d')
+          new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: j.labels,
+              datasets: [
+                {
+                  label: 'Count',
+                  data: j.counts,
+                  backgroundColor: ['rgba(13,110,253,0.35)', 'rgba(220,53,69,0.35)', 'rgba(253,126,20,0.35)'],
+                  borderColor: ['#0d6efd', '#dc3545', '#fd7e14'],
+                  borderWidth: 1
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, precision: 0 } }
+            }
+          })
+        })
+    })()
+  </script>
+{% endblock %}

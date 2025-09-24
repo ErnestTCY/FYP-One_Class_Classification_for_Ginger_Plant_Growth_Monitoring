@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="mb-3">History</h2>
+
+{% set files_base = (backend ~ '/files') if backend is defined else '/files' %}
+
+<div class="row g-3">
+  {% for d in (dets or []) %}
+    <div class="col-sm-6 col-md-4 col-xl-3">
+      <a class="card h-100 text-decoration-none text-reset" href="{{ url_for('ginger_detail', det_id=d.id) }}">
+       {% set imgpath = d.annotated_path or d.image_path %}
+{% set imgurl  = backend ~ '/files/' ~ imgpath %}
+<img class="card-img-top thumb" src="{{ imgurl }}" alt="">
+
+        <div class="card-body">
+          <div class="fw-semibold">{{ d.verdict }} — {{ d.phase }}{% if d.week is defined %} (week {{ d.week }}){% endif %}</div>
+          <div class="text-secondary small">{{ d.ts }}</div>
+          {% if d.session_id %}<div class="small">Session #{{ d.session_id }}</div>{% endif %}
+          <div class="d-flex justify-content-between align-items-center mt-2">
+
+  <form method="post" action="{{ url_for('ui_delete_detection', det_id=d.id) }}" onsubmit="return confirm('Delete this detection from history?');">
+    <input type="hidden" name="next" value="{{ url_for('history') }}">
+    <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+  </form>
+</div>
+
+        </div>
+        
+      </a>
+    </div>
+  {% else %}
+    <div class="col-12"><div class="alert alert-secondary">No history yet.</div></div>
+  {% endfor %}
+</div>
+{% endblock %}

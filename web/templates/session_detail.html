@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h2 class="mb-0">Session #{{ sid }} — {{ sess.name }}</h2>
+    <div class="text-secondary small">Started: {{ sess.started_at }}</div>
+  </div>
+
+  <!-- Top-right action -->
+  <div class="btn-group">
+    <form method="get" action="{{ url_for('session_report_overall', sid=sid) }}">
+      <button class="btn btn-primary">Generate Session PDF</button>
+    </form>
+  </div>
+</div>
+
+
+<div class="row g-3 align-items-start">
+  <div class="col-lg-8">
+    <!-- Top summary -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="fw-semibold">Start week:</div>
+            <span class="badge text-bg-dark">{{ sess.start_week }}</span>
+          </div>
+          <div class="col-md-4">
+            <div class="fw-semibold">Current week:</div>
+            <span class="badge text-bg-primary">{{ sess.current_week }}</span>
+          </div>
+          <div class="col-md-4">
+            <div class="fw-semibold">Phase:</div>
+            <span class="badge text-bg-secondary">{{ sess.phase }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Set current week -->
+    <div class="card mb-3">
+      <div class="card-header">Set current week</div>
+      <div class="card-body">
+        <div class="small text-secondary mb-2">
+          Today: <span class="fw-semibold">{{ now.strftime('%a, %d %b %Y') }}</span>
+        </div>
+        <form method="post" action="{{ url_for('session_set_week', sid=sid) }}" class="row g-2">
+          <div class="col-8">
+            <input class="form-control" type="number" name="current_week" min="1" max="52"
+                   value="{{ sess.current_week }}">
+          </div>
+          <div class="col-4 d-grid">
+            <button class="btn btn-primary">Update</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Add Week -->
+<div class="card mb-4">
+  <div class="card-header">Add week</div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('session_add_week', sid=sid) }}" class="row g-2">
+      <div class="col-8">
+        <input name="week" type="number" min="1" max="52" class="form-control"
+               placeholder="Enter week number" required>
+      </div>
+      <div class="col-4 d-grid">
+        <button class="btn btn-outline-primary">Add</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+  </div>
+
+  <!-- Histogram -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header">Session Histogram</div>
+      <div class="card-body">
+        <canvas id="sessHist" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3 class="mb-2">Weeks</h3>
+<p class="text-secondary">
+  Planned: {{ weeks.planned }} &nbsp; | &nbsp; Present (has data): {{ weeks.present }}
+</p>
+
+<!-- ADD id here -->
+<div id="weeks-grid" class="row g-3">
+  {% for w in weeks.planned %}
+  <div class="col-12 col-md-6 col-lg-4">
+    <div class="card h-100">
+      <div class="card-body d-flex flex-column">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <div class="fw-semibold">Week {{ w }}</div>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteWeek({{ w }})">Delete</button>
+        </div>
+        <div class="small text-secondary mb-3">
+          {{ 'Has detections' if w in weeks.present else 'No data yet' }}
+        </div>
+        <div class="mt-auto">
+          <a class="btn btn-outline-primary w-100"
+             href="{{ url_for('session_week', sid=sid, week=w) }}">
+            Open
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+(function(){
+  const sid = {{ sid }};
+  const API = "{{ backend }}";
+
+  // ---- draw session histogram (unchanged) ----
+  (async () => {
+    try {
+      const r = await fetch(`${API}/api/sessions/${sid}/hist`);
+      if (!r.ok) return;
+      const j = await r.json();
+      const ctx = document.getElementById('sessHist')?.getContext('2d');
+      if (!ctx) return;
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: j.labels,
+          datasets: [{
+            data: j.counts,
+            backgroundColor: ['#4da3ff', '#ff6b6b', '#ffb44d']
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    } catch (e) {}
+  })();
+
+  // ---- render helpers for the Weeks grid ----
+  function weekCardHTML(week, presentList) {
+    const hasData = presentList.includes(week);
+    return `
+      <div class="col-12 col-md-6 col-lg-4">
+        <div class="card h-100">
+          <div class="card-body d-flex flex-column">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="fw-semibold">Week ${week}</div>
+              <button class="btn btn-sm btn-outline-danger" onclick="deleteWeek(${week})">Delete</button>
+            </div>
+            <div class="small text-secondary mb-3">
+              ${hasData ? 'Has detections' : 'No data yet'}
+            </div>
+            <div class="mt-auto">
+              <a class="btn btn-outline-primary w-100" href="/sessions/${sid}/week/${week}">
+                Open
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async function reloadWeeksGrid() {
+    const grid = document.getElementById('weeks-grid');
+    if (!grid) return;
+
+    // get planned + present from API
+    const r = await fetch(`${API}/api/sessions/${sid}/weeks`);
+    if (!r.ok) return;
+    const j = await r.json(); // => { planned: [..], present: [..] }
+
+    const present = Array.isArray(j.present) ? j.present : [];
+    const planned = Array.isArray(j.planned) ? j.planned : [];
+
+    grid.innerHTML = planned.map(w => weekCardHTML(w, present)).join('');
+  }
+
+  // ---- Add week (instant card) ----
+  const addBtn = document.getElementById('add-week-btn');
+  addBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const inp = document.getElementById('add-week-input');
+    const msg = document.getElementById('add-week-msg');
+    msg.textContent = '';
+    const week = parseInt(inp.value, 10);
+    if (!week || week < 1 || week > 52) {
+      msg.textContent = 'Enter a valid week (1–52).';
+      return;
+    }
+
+    async function post(force=false){
+      const res = await fetch(`${API}/api/sessions/${sid}/weeks/plan`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ week, force })
+      });
+      if (res.status === 409) return 'exists';
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // returns { ok, planned: [...], week_meta: {...} }
+      return await res.json();
+    }
+
+    try{
+      let st = await post(false);
+      if (st === 'exists') {
+        if (!confirm(`Week ${week} already exists. Overwrite?`)) return;
+        st = await post(true);
+      }
+      // If we reach here, st is an object
+      // We could use st.week_meta[str(week)].phase if you want to show it in the card subtitle.
+
+      // Re-render the grid so the new week card appears immediately
+      await reloadWeeksGrid();
+
+      // Clear input
+      inp.value = '';
+    }catch(err){
+      console.error(err);
+      msg.textContent = 'Failed to add week.';
+    }
+  });
+
+  // ---- Delete planned week (unchanged, but re-render instead of reload) ----
+  window.deleteWeek = async function(week){
+    if(!confirm(`Remove week ${week} from planned list? (Detections, if any, are kept)`)) return;
+    const res = await fetch(`${API}/api/sessions/${sid}/weeks/${week}`, { method: 'DELETE' });
+    if (!res.ok) { alert('Delete failed'); return; }
+    await reloadWeeksGrid();
+  };
+
+  // Initial render in case you want it JS-driven after page load
+  // (The server already rendered it, but this keeps the UI consistent after editing.)
+  // await reloadWeeksGrid();  // optional
+
+})();
+</script>
+
+{% endblock %}

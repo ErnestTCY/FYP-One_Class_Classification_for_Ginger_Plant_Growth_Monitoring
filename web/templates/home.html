@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Dashboard</h2>
+</div>
+
+
+
+<!-- Weather & Advisory -->
+<div class="row g-3 mt-1">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header d-flex align-items-center">
+        <div>Local Weather — <span id="wx-place" class="fw-semibold"></span></div>
+      </div>
+      <div class="card-body">
+        <div id="wx-current"><div class="text-secondary">Getting your location…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header">Ginger Advisories</div>
+      <div class="card-body">
+        <ul id="wx-advice" class="mb-0">
+          <li class="text-secondary">Waiting for weather…</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hourly humidity -->
+<div class="card mt-3">
+  <div class="card-header">Next 12 Hours — Humidity & Rain Chance</div>
+  <div class="card-body">
+    <div id="wx-hourly" class="text-secondary">Hourly data loading…</div>
+  </div>
+</div>
+<br>
+
+<!-- Active Sessions -->
+<div class="card mb-4">
+  <div class="card-header">Active Sessions</div>
+  <div class="card-body">
+    {% if sessions %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Phase</th>
+              <th>Week</th>
+              <th>Started</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for s in sessions %}
+            <tr>
+              <td>{{ s.id }}</td>
+              <td>{{ s.name }}</td>
+              <td>{{ s.phase }}</td>
+              <td>{{ s.current_week }}</td>
+              <td>{{ s.started_at }}</td>
+              <td class="text-end">
+                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('session_detail', sid=s.id) }}">Open</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="text-secondary">No sessions yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Latest Detections -->
+{% set files_base = backend ~ '/files' %}
+<div class="card mb-4">
+  <div class="card-header">Latest Detections</div>
+  <div class="card-body">
+    {% if latest %}
+      <div class="row g-3">
+        {% for d in latest[:8] %}
+          {% set imgpath = d.annotated_path or d.image_path %}
+          {% set imgurl  = files_base ~ '/' ~ imgpath %}
+          <div class="col-sm-6 col-md-4 col-xl-3">
+            <div class="card h-100">
+              <a href="{{ url_for('ginger_detail', det_id=d.id) }}" class="text-decoration-none">
+                <img class="card-img-top thumb" src="{{ imgurl }}" alt="">
+              </a>
+              <div class="card-body">
+                <div class="fw-semibold">{{ d.verdict }}</div>
+                <div class="small text-secondary">Week {{ d.week }} — {{ d.ts }}</div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="text-secondary">No detections yet.</div>
+    {% endif %}
+  </div>
+</div>
+<style>
+    .wx-stack { display: inline-flex; flex-direction: column; align-items: center; }
+  .wx-summary { margin-top: .25rem; font-weight: 600; }
+  .wx-icon { width: 72px; height: 72px; object-fit: contain; flex: 0 0 auto; }
+  @media (max-width: 576px) { .wx-icon { width: 56px; height: 56px; } }
+</style>
+
+<!-- Weather script -->
+<script>
+(function () {
+  const API   = "{{ backend }}";
+  const elCur = document.getElementById('wx-current');
+  const elAdv = document.getElementById('wx-advice');
+  const elHr  = document.getElementById('wx-hourly');
+  const elPlc = document.getElementById('wx-place');
+
+  function render(w){
+    if (!w || !w.ok) {
+      elCur.innerHTML = '<div class="text-secondary">Weather unavailable.</div>';
+      elAdv.innerHTML = '<li class="text-secondary">No advisories.</li>';
+      elHr.textContent = 'Hourly data unavailable.';
+      elPlc.textContent = '';
+      return;
+    }
+
+    const place = (w.current && (w.current.location_name || w.location_name)) || "Your location";
+    elPlc.textContent = place;
+
+let iconHtml = "";
+if (w.current?.icon_url) {
+  iconHtml = `<img class="wx-icon" src="${w.current.icon_url}" alt="">`;
+} else if (w.current?.icon) {
+  iconHtml = `<img class="wx-icon" src="https://openweathermap.org/img/wn/${w.current.icon}@4x.png" alt="">`;
+} else if (w.current?.icon_emoji) {
+  iconHtml = `<span style="font-size:2.2rem;line-height:1;">${w.current.icon_emoji}</span>`;
+}
+
+
+
+    const units = (w.current && w.current.units) === 'metric' ? 'C' : 'F';
+    const temp  = (w.current && w.current.temp != null) ? Number(w.current.temp).toFixed(1) : '—';
+    const hum   = (w.current && w.current.humidity != null) ? w.current.humidity : '—';
+    const rain1 = (w.current && w.current.rain_1h != null) ? w.current.rain_1h : 0;
+    const windK = (w.current && w.current.wind_speed != null) ? Math.round(Number(w.current.wind_speed) * 3.6) : '—';
+    const uvi   = (w.current && w.current.uvi != null) ? w.current.uvi : 0;
+
+    elCur.innerHTML = `
+      <div class="row g-3 align-items-center">
+<div class="col-sm-6">
+  <div class="text-center">
+    <span class="wx-stack">
+      ${iconHtml}
+      <span class="wx-summary">${(w.current && w.current.summary) || '—'}</span>
+    </span>
+    
+  </div>
+</div>
+
+
+        <div class="col-sm-6">
+          <div class="row text-center">
+            <div class="col"><div class="small">Temp</div><div class="fs-5">${temp}°${units}</div></div>
+            <div class="col"><div class="small">Humidity</div><div class="fs-5">${hum}%</div></div>
+            <div class="col"><div class="small">Rain (1h)</div><div class="fs-5">${rain1} mm</div></div>
+            <div class="col"><div class="small">Wind</div><div class="fs-5">${windK} km/h</div></div>
+            <div class="col"><div class="small">UV</div><div class="fs-5">${uvi}</div></div>
+          </div>
+        </div>
+      </div>`;
+
+    // Advisories
+    elAdv.innerHTML = (Array.isArray(w.advice) && w.advice.length)
+      ? w.advice.map(a => `<li>${a}</li>`).join('')
+      : '<li class="text-secondary">No advisories.</li>';
+
+    // Hourly table
+    const hours = Array.isArray(w.hours) ? w.hours.slice(0,12) : [];
+    const rows = hours.map(h => {
+      const dt = h.dt ? new Date(h.dt * 1000) : null;
+      const hh = dt ? dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '—';
+      const rh = (h.humidity != null) ? h.humidity : '—';
+      const pp = Math.round(((h.pop || 0) * 100));
+      const tp = (h.temp != null) ? Number(h.temp).toFixed(1) : '—';
+      return `<tr>
+        <td>${hh}</td>
+        <td class="text-end">${rh}%</td>
+        <td class="text-end">${pp}%</td>
+        <td class="text-end">${tp}°${units}</td>
+      </tr>`;
+    }).join('');
+
+    elHr.innerHTML = rows ? `
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Hour</th><th class="text-end">Humidity</th><th class="text-end">POP</th><th class="text-end">Temp</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>` : 'Hourly data unavailable.';
+  }
+
+  async function fallback(){
+    try { render(await fetchWeather(null, null, true)); }  // force fresh on fallback
+    catch { render(null); }
+  }
+
+  if (!('geolocation' in navigator)) { fallback(); return; }
+async function fetchWeather(lat, lon, nocache=false){
+  const qs = new URLSearchParams();
+  if (lat!=null && lon!=null) { qs.set('lat', lat); qs.set('lon', lon); }
+  if (nocache) qs.set('nocache','1');
+  const r = await fetch(`${API}/api/weather?${qs.toString()}`);
+  return r.json();
+}
+
+navigator.geolocation.getCurrentPosition(async pos => {
+  render(await fetchWeather(pos.coords.latitude, pos.coords.longitude, true)); // <- nocache
+}, () => fallback(), { enableHighAccuracy:true, maximumAge:0, timeout:15000 });})();  
+</script>
+
+{% endblock %}

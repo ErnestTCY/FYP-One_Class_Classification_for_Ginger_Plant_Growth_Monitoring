@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ginger Plant Growth Monitoring</title>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous" />
+
+    <!-- Your custom CSS (still loaded) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}" />
+
+    <style>
+      /* Brand palette */
+      :root {
+        --brand-light: #e9f7ef; /* page bg (light green) */
+        --brand-green: #0b5d1e; /* dark green */
+        --brand-accent: #1f8a3c; /* buttons */
+        --brand-accent-rgb: 31, 138, 60;
+      
+        --nav-light-blue: #eaf4ff; /* navbar bg */
+        --nav-blue-border: #cfe4ff; /* navbar border */
+      
+        --hover-light-green: #dff5e6; /* nav hover */
+        --header-light: #e9f7ef; /* header text (light green) */
+      }
+      
+      /* Make Bootstrap “primary” green so your btn-primary stays consistent */
+      :root {
+        --bs-primary: var(--brand-accent);
+        --bs-primary-rgb: var(--brand-accent-rgb);
+      }
+      
+      /* Global look */
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        background: var(--brand-light);
+        color: var(--brand-green);
+        font-size: 1.1rem;
+      }
+      .container-page {
+        max-width: 1400px;
+      }
+      
+      :root {
+        --nav-light-blue: #3ad268ff;
+        --nav-blue-border: #cfe4ff; /* subtle blue border */
+      }
+      
+      .navbar {
+        background: var(--nav-light-blue) !important;
+        color: var(--brand-green);
+        border-bottom: 1px solid var(--nav-blue-border);
+      }
+      
+      .navbar .navbar-brand,
+      .navbar .nav-link {
+        color: var(--brand-green) !important;
+      }
+      .navbar .nav-link {
+        border-radius: 0.5rem;
+        margin-right: 0.25rem;
+        padding: 0.4rem 0.6rem;
+        transition: background-color 0.15s ease, color 0.15s ease;
+        color: var(--brand-green) !important;
+      }
+      .navbar .nav-link:hover,
+      .navbar .nav-link:focus {
+        background: var(--hover-light-green) !important; /* light green hover */
+        color: var(--brand-green) !important;
+      }
+      .brand-logo {
+        font-weight: 700;
+      }
+      
+      /* CARDS / BOXES — keep white everywhere */
+      .card,
+      .list-group,
+      .list-group-item,
+      .modal-content,
+      .table {
+        background: #fff !important;
+        color: var(--brand-green) !important;
+      }
+      .card-header {
+        background: #a6f8abff !important;
+        color: #0f7016ff !important;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+      }
+      
+      .card-header a,
+      .card-header .text-secondary {
+        color: #0f7016ff !important;
+        opacity: 1;
+      }
+      .card-header .badge {
+        color: var(--header-light) !important;
+        opacity: 0.95;
+      }
+      /* Chat bubbles */
+      .msg {
+        display: flex;
+        margin: 0.25rem 0;
+      }
+      .msg.me {
+        justify-content: flex-end;
+      }
+      .msg .bubble {
+        max-width: 80%;
+        padding: 0.5rem 0.75rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+      }
+      .msg.me .bubble {
+        background: #e7f1ff;
+      }
+      .msg.ai .bubble {
+        background: #f5fff7;
+      }
+      .msg.sys .bubble {
+        background: #f8f9fa;
+        font-size: 0.9rem;
+      }
+      
+      .card,
+      .list-group,
+      .list-group-item,
+      .modal-content,
+      .table {
+        background: #fff !important;
+        color: var(--brand-green) !important;
+      }
+      
+      /* Make all text (even “secondary”) dark green as requested */
+      .text-secondary {
+        color: var(--brand-green) !important;
+      }
+      
+      /* THUMBNAILS vs full-res images */
+      .thumb {
+        object-fit: cover;
+        max-height: 240px;
+      }
+      .fullres {
+        object-fit: contain;
+        width: 100%;
+        height: auto;
+        max-height: none;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+
+  <body>
+    <!-- NAV: brand left, links immediately to its right (no ms-auto) -->
+    <nav class="navbar navbar-expand-lg sticky-top shadow-sm" style="z-index:1060">
+      <div class="container-xxl">
+        <a class="navbar-brand brand-logo" href="{{ url_for('home') }}">OCC for Ginger Plant Growth</a>
+
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarsMain" aria-controls="navbarsMain" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button>
+
+        <div class="collapse navbar-collapse" id="navbarsMain">
+          <!-- move nav items to the left side (no ms-auto) -->
+          <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('home') }}">Home</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('sessions') }}">Sessions</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('detect_page') }}">Plant Detection</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('history') }}">History</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <main class="container-xxl container-page py-4">
+      {% with msgs=get_flashed_messages() %}
+        {% if msgs %}
+          <div class="alert alert-primary" role="alert">
+            {% for m in msgs %}
+              <div>{{ m }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}
+      {% endblock %}
+    </main>
+
+    <!-- Collapsible AI Assistant -->
+    <button id="chat-toggle" class="btn btn-primary rounded-pill position-fixed" style="right: 1rem; bottom: 1rem; z-index: 1050;">
+      <span class="me-1">AI Assistant 🤖</span>
+      <span id="chat-chevron">▲</span>
+    </button>
+
+    <div id="chat-panel" class="position-fixed shadow rounded-3" style="right: 1rem; bottom: 4.5rem; width: 360px; max-height: 70vh; background:#fff; border:1px solid rgba(0,0,0,.08); display:none; z-index: 1050;">
+      <div class="card m-0 border-0">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>AI Assistant</span>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="chat-weather-switch" checked />
+            <label class="form-check-label small" for="chat-weather-switch">Use weather</label>
+          </div>
+        </div>
+        <div id="chat-body" class="card-body p-2" style="height: 260px; overflow:auto;"></div>
+        <div class="card-footer p-2">
+          <div class="d-flex flex-wrap gap-2 mb-2" id="chat-suggest"></div>
+          <div class="input-group">
+            <input type="text" id="chat-text" class="form-control" placeholder="Ask ginger care tips… (Enter to send)" />
+            <button class="btn btn-primary" id="chat-send">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+   <!-- Tell the browser where the backend lives (reachable from THIS device). -->
+<script>
+  // Use the value your views pass in as `backend`, or fall back to your LAN IP.
+  window.BACKEND = "{{ backend|default('http://192.168.1.137:8001', true) }}";
+</script>
+
+<!-- Chatbot (load only once) -->
+<script src="{{ url_for('static', filename='js/chatbot.js') }}"></script>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+
+  </body>
+</html>

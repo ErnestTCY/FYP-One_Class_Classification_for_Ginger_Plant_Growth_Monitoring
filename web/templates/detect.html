@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="mb-3">Plant Detection (Manual)</h2>
+<div class="card">
+  <div class="card-body">
+    <form id="uploadForm" action="" method="post" enctype="multipart/form-data" class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label">Week (1–20)</label>
+        <input class="form-control" type="number" name="week" min="1" max="20" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Attach to Session (optional)</label>
+        <select class="form-select" name="session_id">
+          <option value="">(none)</option>
+          {% for s in sessions %}
+            <option value="{ {s.id}}">#{{s.id}} — {{s.name}} (start={{s.start_week}}, current={{s.current_week}})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-5">
+        <label class="form-label">Upload Image</label>
+        <input class="form-control" type="file" name="image" accept="image/*" required>
+      </div>
+      <div class="col-12 d-grid d-md-flex justify-content-md-end">
+        <button class="btn btn-primary">Submit</button>
+      </div>
+    </form>
+    <script>
+  document.getElementById("uploadForm").addEventListener("submit", function () {
+    // Force reload after submission
+    setTimeout(function () {
+      window.location.reload(true);
+    }, 500); // small delay so form can post
+  });
+</script>
+  </div>
+</div>
+{% endblock %}

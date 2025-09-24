@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  /* table look */
+  .tbl-sessions thead th{
+    background:#0d47a1;       /* dark blue */
+    color:#fff;
+    border-color:#08306b;
+  }
+  .tbl-sessions tbody tr{
+    background:#e3f2fd;       /* light blue */
+    color:#000;               /* black text */
+  }
+  .tbl-sessions tbody tr:hover{
+    background:#bbdefb;       /* hover: a bit darker light blue */
+  }
+  .tbl-sessions td, .tbl-sessions th{
+    border-color:rgba(0,0,0,.15);
+    vertical-align: middle;
+  }
+  /* small pill for phase looks nicer on light bg */
+  .phase-badge{
+    background:#e0e0e0;
+    color:#000;
+  }
+  .btn-row-actions .btn{
+    margin-left:.25rem;
+  }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Sessions</h2>
+</div>
+
+<form method="post" class="row g-2 align-items-end mb-4">
+  <div class="col-md-5">
+    <label class="form-label">Session name</label>
+    <input name="name" class="form-control" placeholder="Session name" required>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label">Start week (1–20)</label>
+    <input name="start_week" type="number" min="1" max="20" value="1" class="form-control">
+  </div>
+  <div class="col-md-2">
+    <button type="submit" class="btn btn-primary w-100">Create</button>
+  </div>
+</form>
+
+<div class="table-responsive">
+  <table class="table tbl-sessions align-middle">
+    <thead>
+      <tr>
+        <th style="width: 80px;">ID</th>
+        <th>Name</th>
+        <th style="width: 140px;">Start Week</th>
+        <th style="width: 150px;">Current Week</th>
+        <th style="width: 180px;">Phase</th>
+        <th style="width: 240px;">Started (date)</th>
+        <th class="text-end" style="width: 180px;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {# sort ascending by id right here #}
+      {% for s in sessions|sort(attribute='id') %}
+      <tr>
+        <td>#{{ s.id }}</td>
+        <td>{{ s.name }}</td>
+        <td>{{ s.start_week }}</td>
+        <td>{{ s.current_week }}</td>
+        <td><span class="badge phase-badge">{{ s.phase or s.current_phase or '—' }}</span></td>
+        <td>{{ s.started_display or s.started_iso or s.started_at or '—' }}</td>
+        <td class="text-end">
+          <div class="btn-row-actions">
+            <a class="btn btn-primary btn-sm" href="{{ url_for('session_detail', sid=s.id) }}">Open</a>
+            <button class="btn btn-outline-danger btn-sm"
+                    data-sid="{{ s.id }}" data-name="{{ s.name }}"
+                    onclick="delSession(this)">Delete</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+(function(){
+  const API = "{{ backend }}";
+
+  // Delete session (calls backend DELETE /api/sessions/<sid>)
+  window.delSession = async function(btn){
+    const sid  = btn.getAttribute('data-sid');
+    const name = btn.getAttribute('data-name') || ('#' + sid);
+
+    if(!confirm(`Delete session ${name}? This may remove all detections under it.`)) return;
+
+    try{
+      const res = await fetch(`${API}/api/sessions/${sid}`, { method: 'DELETE' });
+      if(!res.ok){
+        const text = await res.text().catch(()=> '');
+        alert(`Delete failed (${res.status}). ${text}`);
+        return;
+      }
+      // success
+      location.reload();
+    }catch(err){
+      alert('Network error while deleting this session.');
+    }
+  };
+})();
+</script>
+
+{% endblock %}
