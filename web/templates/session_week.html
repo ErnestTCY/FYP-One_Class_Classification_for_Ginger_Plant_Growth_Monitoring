@@ -58,8 +58,13 @@
       <div class="accordion-item">
         <h2 class="accordion-header" id="h{{ loop.index }}">
           <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#c{{ loop.index }}">
-            {{ day.name }} — {{ day.date }}
-            <span class="badge text-bg-primary ms-2">{{ day.count }}</span>
+            <div class="d-flex justify-content-between align-items-center w-100">
+              <div>
+                <span class="fw-bold">{{ day.name }}</span>
+                <span class="text-muted ms-2">{{ day.date }}</span>
+              </div>
+              <span class="badge text-bg-primary">{{ day.count }}</span>
+            </div>
           </button>
         </h2>
         <div id="c{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#accDays">

@@ -10,9 +10,6 @@ from requests.exceptions import RequestException
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, redirect, url_for, flash
 
-# -----------------------------------------------------------------------------
-# App / config
-# -----------------------------------------------------------------------------
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 BACKEND = os.getenv("BACKEND_URL", "http://127.0.0.1:8001")
 
@@ -23,10 +20,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
-
-# -----------------------------------------------------------------------------
-# HTTP helpers with detailed logging
-# -----------------------------------------------------------------------------
 def fetch_json(url, default=None, timeout=8):
     t0 = time.time()
     try:
@@ -35,20 +28,13 @@ def fetch_json(url, default=None, timeout=8):
         if r.ok:
             try:
                 j = r.json()
-                app.logger.info(
-                    f"[UI] GET {url} -> {r.status_code} in {dt:.1f}ms; "
-                    f"type={'dict' if isinstance(j, dict) else 'list'} keys={list(j) if isinstance(j, dict) else '—'}"
-                )
+                app.logger.info(f"[UI] GET {url} -> {r.status_code} in {dt:.1f}ms")
                 return j
             except ValueError:
-                app.logger.error(
-                    f"[UI] GET {url} non-JSON in {dt:.1f}ms; body[:200]={r.text[:200]!r}"
-                )
+                app.logger.error(f"[UI] GET {url} non-JSON in {dt:.1f}ms")
                 return default
         else:
-            app.logger.warning(
-                f"[UI] GET {url} -> HTTP {r.status_code} in {dt:.1f}ms; body[:200]={r.text[:200]!r}"
-            )
+            app.logger.warning(f"[UI] GET {url} -> HTTP {r.status_code} in {dt:.1f}ms")
             return default
     except RequestException as e:
         dt = (time.time() - t0) * 1000
@@ -60,9 +46,7 @@ def post_json(url, payload=None, timeout=12):
     try:
         r = requests.post(url, json=(payload or {}), timeout=timeout)
         dt = (time.time() - t0) * 1000
-        app.logger.info(
-            f"[UI] POST {url} payload={payload} -> {r.status_code} in {dt:.1f}ms; body[:200]={r.text[:200]!r}"
-        )
+        app.logger.info(f"[UI] POST {url} -> {r.status_code} in {dt:.1f}ms")
         return r
     except RequestException as e:
         dt = (time.time() - t0) * 1000
@@ -74,9 +58,7 @@ def delete_call(url, timeout=12):
     try:
         r = requests.delete(url, timeout=timeout)
         dt = (time.time() - t0) * 1000
-        app.logger.info(
-            f"[UI] DELETE {url} -> {r.status_code} in {dt:.1f}ms; body[:200]={r.text[:200]!r}"
-        )
+        app.logger.info(f"[UI] DELETE {url} -> {r.status_code} in {dt:.1f}ms")
         return r
     except RequestException as e:
         dt = (time.time() - t0) * 1000
@@ -84,7 +66,6 @@ def delete_call(url, timeout=12):
         return None
 
 def _try_delete(url):
-    # Prefer DELETE; if some proxies block it, fall back to POST /delete
     r = delete_call(url)
     if r is not None and r.status_code >= 400:
         try:
@@ -95,14 +76,9 @@ def _try_delete(url):
             app.logger.exception(f"[UI] POST fallback {url}/delete failed: {e}")
             return r
     return r
-
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
 @app.get("/sessions/<int:sid>/report_overall")
 def session_report_overall(sid):
     url = f"{BACKEND}/api/sessions/{sid}/report_overall"
-    # give it time to render
     r = requests.get(url, timeout=120)
     if r.status_code != 200:
         return f"Report generation failed (HTTP {r.status_code}).", r.status_code
@@ -383,8 +359,5 @@ def ui_delete_detection_in_week(sid, week, det_id):
     app.logger.info(f"[UI] delete_detection_in_week sid={sid} week={week} det_id={det_id} -> {(r.status_code if r else 'no response')}")
     return redirect(url_for("session_week", sid=sid, week=week))
 
-# -----------------------------------------------------------------------------
-# Run
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)

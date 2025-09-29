@@ -1,44 +1,42 @@
-from runpy import run_path
-import os, io, json, uuid
+import os
+import io
+import json
+import uuid
+import time
+import logging
+import textwrap
+import traceback
 from queue import Queue, Empty
 from threading import Thread
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from collections import defaultdict, Counter
+from io import BytesIO
+
+import requests
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory, abort
 from flask_cors import CORS
-from flask import send_from_directory
-from pathlib import Path
-from datetime import datetime, timezone
-from collections import defaultdict
 from flask_sqlalchemy import SQLAlchemy
-from database import db, Session, Detection, Reasoning, Report
-from inference_engine import InferenceEngine, PhaseModel
-from model_paths import phase_ckpt_map, PHASE_EARLY, PHASE_VG, PHASE_BP, PHASE_RM
-from report_gen import make_report
-from datetime import datetime,timedelta
-from week_utils import phase_from_week
-import os
-from gemini_client import gemini_reasoning
-import time, requests
-from pathlib import Path
-import logging,traceback
 from werkzeug.exceptions import NotFound
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
-from flask import send_file, abort
-import textwrap 
-from io import BytesIO
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-# --- Histogram helpers -------------------------------------------------------
-from collections import Counter
+
+from database import db, Session, Detection, Reasoning, Report
+from inference_engine import InferenceEngine, PhaseModel
+from model_paths import phase_ckpt_map, PHASE_EARLY, PHASE_VG, PHASE_BP, PHASE_RM
+from report_gen import make_report
+from week_utils import phase_from_week
+from gemini_client import gemini_reasoning
 
 LABELS_HIST = ["Normal plant", "Abnormal plant", "Empty Bag Detected"]
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-
-WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 ENV_PATH = Path(__file__).with_name(".env")
-load_dotenv(Path(__file__).with_name(".env")) 
+load_dotenv(ENV_PATH)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 app = Flask(__name__)
 
@@ -51,7 +49,7 @@ def _log_incoming():
     app.logger.info(f"[API IN] {request.method} {request.path} args={dict(request.args)} json={body}")
 
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=False)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # optional
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-key")
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///ginger_occ.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -70,19 +68,22 @@ with app.app_context():
         app.logger.warning(f"[DB] Could not ensure 'details' column: {e}")
 
 _WEATHER_CACHE = {"ts": 0, "data": None}
-_WEATHER_TTL   = 600  # seconds
+_WEATHER_TTL = 600
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR   = os.getenv("UPLOAD_DIR",   "./uploads");   os.makedirs(UPLOAD_DIR, exist_ok=True)
-RESULTS_DIR  = os.getenv("RESULTS_DIR",  "./results");   os.makedirs(RESULTS_DIR, exist_ok=True)
-ARTIFACTS_DIR= os.getenv("ARTIFACTS_DIR","./artifacts"); os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
+RESULTS_DIR = os.getenv("RESULTS_DIR", "./results")
+ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", "./artifacts")
 
-# Inference setup (load YOLO + three MAML checkpoints)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(RESULTS_DIR, exist_ok=True)
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
 yolo_w = os.getenv("YOLO_WEIGHTS", "models/yolo_ginger_bag.pt")
 conf_thresh = float(os.getenv("CONF_THRESH", "0.5"))
 area_thresh = int(os.getenv("AREA_THRESH", "500"))
-tau_override= float(os.getenv("TAU_OVERRIDE", "0.6"))
-tau_scale   = float(os.getenv("TAU_SCALE",   "0.9"))
-box_width   = int(os.getenv("BOX_WIDTH",     "6"))
+tau_override = float(os.getenv("TAU_OVERRIDE", "0.6"))
+tau_scale = float(os.getenv("TAU_SCALE", "0.9"))
+box_width = int(os.getenv("BOX_WIDTH", "6"))
 
 phase_models = {}
 for p, ck in phase_ckpt_map().items():
@@ -113,14 +114,13 @@ def _generate_gemini_reasoning(prompt: str) -> str:
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         resp = model.generate_content(prompt)
         text = (getattr(resp, "text", "") or "").strip()
         return text or "No content returned by Gemini."
     except Exception as e:
         return f"Generation error: {e}"
     
-# shared builder so GET and POST (and both paths) behave the same
 def _build_and_send_week_pdf(sid: int, week: int):
     sess = Session.query.get_or_404(sid)
 
@@ -133,7 +133,6 @@ def _build_and_send_week_pdf(sid: int, week: int):
     reports_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = reports_dir / f"session_{sid}_week_{week}.pdf"
 
-    # Use our rich builder (includes per-detection reasoning if present + Gemini summary)
     pdf_bytes, _fname = _build_detections_report_pdf(
         sess, dets, title=f"Week {week} Report", group_by=None
     )
@@ -151,8 +150,6 @@ def _build_and_send_week_pdf(sid: int, week: int):
         etag=False,
         conditional=False,
     )
-
-# ------------------ GEMINI HELPERS ------------------
 
 def _gemini_key():
     return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -182,11 +179,10 @@ def _weather_line_for_llm(d):
     return ", ".join(parts) if parts else "n/a"
 
 def _call_gemini_flash(prompt_text, temperature=0.4, timeout=25):
-    """Call Gemini 1.5 Flash. Returns string on success, None on failure."""
     api_key = _gemini_key()
     if not api_key:
         return None
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent"
     try:
         r = requests.post(
             url,
@@ -236,8 +232,6 @@ def _build_overall_gemini_summary(sess, detections, scope_label):
         "OBSERVATIONS:\n" + "\n".join(items)
     )
     return _call_gemini_flash(prompt)
-
-# ------------------ PDF BUILDERS ------------------
 
 def _format_weather_line(d):
     parts = []
@@ -312,21 +306,17 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
     from reportlab.pdfgen import canvas
     from reportlab.lib import colors
 
-    # ---------- small helpers ----------
     def _fs(relpath: str):
-        """Resolve a relative path to a real file on disk, trying a few common bases."""
         if not relpath:
             return None
         relpath = relpath.replace("\\", "/")
-        # try relative to Flask app root
         try:
-            root = app.root_path  # noqa: F821 (defined in the module)
+            root = app.root_path
         except Exception:
             root = "."
         p0 = os.path.join(root, relpath)
         if os.path.exists(p0):
             return p0
-        # common fallbacks
         for base in (".", "uploads", "results", "artifacts", os.path.join(root, "static")):
             p = os.path.join(base, relpath)
             if os.path.exists(p):
@@ -359,14 +349,10 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
         txt = (det.get("reasoning_text") or "").strip()
         return txt or None
 
-    # ---------- plant-level counts & defect rate ----------
-    # Expecting _hist_from_rows to exist in this module; returns [normal, abnormal, empty]
-    counts = _hist_from_rows(detections)  # noqa: F821
+    counts = _hist_from_rows(detections)
     normal_total, abnormal_total, empty_total = counts
-    denom = max(1, normal_total + abnormal_total)  # plant-only
+    denom = max(1, normal_total + abnormal_total)
     defect_rate = (abnormal_total / denom) * 100.0
-
-    # ---------- reasoning roll-up (fallback if Gemini not available) ----------
     reason_lines = []
     for d in detections:
         rtxt = _reasoning_text(d)
@@ -381,28 +367,22 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
             break
     rollup = "\n".join(reason_lines) if reason_lines else "No per-plant reasoning available in this scope."
 
-    # ---------- try Gemini summary (safe fallback to rollup) ----------
     gem_summary = None
     try:
         scope_label = "Session" if (group_by == "week" or "Session" in (title or "")) else (title or "Report")
-        # expecting _build_overall_gemini_summary in module; non-fatal if missing/unconfigured
-        gem_summary = _build_overall_gemini_summary(sess, detections, scope_label=scope_label)  # noqa: F821
+        gem_summary = _build_overall_gemini_summary(sess, detections, scope_label=scope_label)
         if gem_summary:
             gem_summary = gem_summary.strip()
     except Exception:
         gem_summary = None
-
-    # ---------- init canvas ----------
     buf = io.BytesIO()
     W, H = A4
     c = canvas.Canvas(buf, pagesize=A4)
 
-    # Title
     c.setFont("Helvetica-Bold", 16)
     c.drawString(30, H - 50, title or "Report")
     y = H - 80
 
-    # Session meta (best-effort)
     if sess:
         c.setFont("Helvetica", 10)
         sid = getattr(sess, "id", "N/A")
@@ -413,13 +393,10 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
         started_at = getattr(sess, "started_at", None)
         c.drawString(30, y, f"Started: {started_at if started_at else 'N/A'}")
         y -= 18
-
-    # ---------- Summary box (auto height; Gemini/roll-up directly below defect rate) ----------
     summary_text = gem_summary or rollup
     wrapped = _wrap(summary_text, width=100)
 
-    # Base area for counts + header; then add body height per line (~11px)
-    base_h = 88  # title + 4 lines (3 counts + rate)
+    base_h = 88
     lines_h = min(600, 11 * max(1, len(wrapped)))
     box_x, box_w = 30, W - 60
     box_h = base_h + lines_h
@@ -428,20 +405,16 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
     c.setFillColorRGB(0.93, 0.98, 0.93)
     c.roundRect(box_x, box_y, box_w, box_h, radius=10, stroke=0, fill=1)
 
-    # Header
     c.setFillColorRGB(0, 0.45, 0)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(box_x + 10, box_y + box_h - 20, "Summary (plant-level)")
 
-    # Counts + defect rate
     c.setFillColor(colors.black)
     c.setFont("Helvetica", 10)
     c.drawString(box_x + 10, box_y + box_h - 38, f"Normal plants: {normal_total}")
     c.drawString(box_x + 10, box_y + box_h - 52, f"Abnormal plants: {abnormal_total}")
     c.drawString(box_x + 10, box_y + box_h - 66, f"Empty bags: {empty_total}")
     c.drawString(box_x + 10, box_y + box_h - 80, f"Defect rate (Abnormal/(Normal+Abnormal)): {defect_rate:.2f}%")
-
-    # Gemini / roll-up paragraph — appears right *below* the defect rate
     c.setFont("Helvetica-Oblique", 9)
     ry = box_y + box_h - 96
     for line in wrapped:
@@ -452,15 +425,12 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
 
     y = box_y - 24
 
-    # ---------- Layout: Session vs Weekly ----------
-    # Common card layout knobs (smaller image, more room for text)
     IMG_W, IMG_H = 140, 105
     LEFT_X = 30
     RIGHT_X = 180
-    CARD_DROP = 200  # extra vertical space per detection block
+    CARD_DROP = 200
 
     if group_by == "week":
-        # SESSION REPORT: group by numeric week; include per-detection reasoning
         groups = {}
         for d in detections:
             wk = getattr(d, "week", None)
@@ -484,26 +454,22 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
                 img_rel = getattr(d, "annotated_path", None) or getattr(d, "image_path", None)
                 img_fs = _fs(img_rel)
 
-                # Left: image (smaller to free right column)
                 if img_fs:
                     try:
                         c.drawImage(img_fs, LEFT_X, y - (IMG_H + 75), width=IMG_W, height=IMG_H,
                                     preserveAspectRatio=True, anchor='sw')
                     except Exception:
                         pass
-
-                # Right: meta + (now) reasoning if present
                 c.setFont("Helvetica-Bold", 10)
                 c.drawString(RIGHT_X, y - 10,
                              f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
                 c.setFont("Helvetica", 9)
                 c.drawString(RIGHT_X, y - 24, f"Time: {_safe_ts(d)}")
 
-                wline = _format_weather_line(d)  # noqa: F821
+                wline = _format_weather_line(d)
                 if wline and wline != "—":
                     c.drawString(RIGHT_X, y - 38, f"Weather: {wline}")
 
-                # Per-detection reasoning (SESSION scope now includes it)
                 rtxt = _reasoning_text(d)
                 if rtxt:
                     c.setFont("Helvetica-Oblique", 8)
@@ -512,14 +478,11 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
                         c.drawString(RIGHT_X, ry, line)
                         ry -= 10
                         if ry < 80:
-                            # New page for long reasoning blocks
                             c.showPage(); y = H - 60
                             c.setFont("Helvetica-Oblique", 8)
                             c.drawString(LEFT_X, y, f"(continued — Week {wk})")
                             y -= 18
                             ry = y - 56
-
-                # Drop down to the next "card"
                 y -= CARD_DROP
                 if y < 160:
                     c.showPage(); y = H - 60
@@ -529,7 +492,6 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
                 c.showPage(); y = H - 60
 
     else:
-        # WEEKLY (or ungrouped) REPORT: show all detections with per-detection reasoning if present
         c.setFont("Helvetica-Bold", 12)
         c.drawString(LEFT_X, y, "Detections")
         y -= 18
@@ -538,25 +500,21 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
             img_rel = getattr(d, "annotated_path", None) or getattr(d, "image_path", None)
             img_fs = _fs(img_rel)
 
-            # Left: image (smaller)
             if img_fs:
                 try:
                     c.drawImage(img_fs, LEFT_X, y - (IMG_H + 75), width=IMG_W, height=IMG_H,
                                 preserveAspectRatio=True, anchor='sw')
                 except Exception:
                     pass
-
-            # Right: meta
             c.setFont("Helvetica-Bold", 10)
             c.drawString(RIGHT_X, y - 10,
                          f"Det #{getattr(d,'id','?')} — {getattr(d,'verdict','?')} — {getattr(d,'phase','?')}")
             c.setFont("Helvetica", 9)
             c.drawString(RIGHT_X, y - 24, f"Time: {_safe_ts(d)}")
-            wline = _format_weather_line(d)  # noqa: F821
+            wline = _format_weather_line(d)
             if wline and wline != "—":
                 c.drawString(RIGHT_X, y - 38, f"Weather: {wline}")
 
-            # Per-detection reasoning — ONLY if present
             rtxt = _reasoning_text(d)
             if rtxt:
                 c.setFont("Helvetica-Oblique", 8)
@@ -570,18 +528,14 @@ def _build_detections_report_pdf(sess, detections, title="Detection Report", gro
                         c.drawString(LEFT_X, y, "(continued)")
                         y -= 18
                         ry = y - 56
-
-            # Next detection "card"
             y -= CARD_DROP
             if y < 160:
                 c.showPage(); y = H - 60
 
-    # ---------- finalize ----------
     c.save()
     pdf_bytes = buf.getvalue()
     buf.close()
 
-    # Filename
     if group_by == "week" or "Session" in (title or ""):
         fname = f"report_session_{getattr(sess, 'id', 'na')}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
     elif "Week" in (title or ""):
@@ -961,33 +915,45 @@ def api_chat():
       "messages": [{"role":"user"/"assistant"/"system","content":"..."}],
       "include_weather": true|false
     }
-    We do not persist history on the server — client sends it each call.
+    Always returns HTTP 200 with {ok: True|False} to avoid breaking the UI.
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
         msgs = data.get("messages", [])
         include_weather = bool(data.get("include_weather"))
 
-        # Optional context: current local weather to ground answers.
+        # Optional weather context
         weather_blob = ""
         if include_weather:
             try:
-                # reuse your existing weather endpoint logic
-                w = api_weather()  
-                if w and "current" in w:
-                    cur = w["current"]
+                w = api_weather()  # returns Flask Response or tuple
+                # If api_weather returned a Flask response, extract JSON
+                if hasattr(w, "json"):
+                    wj = w.get_json(silent=True) or {}
+                elif isinstance(w, tuple) and len(w) >= 1 and hasattr(w[0], "json"):
+                    wj = w[0].get_json(silent=True) or {}
+                else:
+                    wj = w if isinstance(w, dict) else {}
+                cur = wj.get("current", {})
+                if cur:
+                    units = (cur.get("units") or "metric").lower()
+                    tunit = "C" if units == "metric" else "F"
+                    wind_kmh = cur.get("wind_speed")
+                    try:
+                        wind_kmh = round(float(wind_kmh) * 3.6)
+                    except Exception:
+                        wind_kmh = wind_kmh
                     weather_blob = (
                         f"\n\n[Current Weather]\n"
                         f"Summary: {cur.get('summary')}\n"
-                        f"Temp: {cur.get('temp')}°{ 'C' if cur.get('units')=='metric' else 'F'}\n"
+                        f"Temp: {cur.get('temp')}°{tunit}\n"
                         f"Humidity: {cur.get('humidity')}%\n"
                         f"Rain(1h): {cur.get('rain_1h', 0)} mm\n"
-                        f"Wind: {round(cur.get('wind_speed',0)*3.6)} km/h\n"
+                        f"Wind: {wind_kmh} km/h\n"
                     )
             except Exception:
                 weather_blob = ""
 
-        # Compose a safe system prompt that keeps the model on ginger-care topic
         system_prompt = (
             "You are a helpful agronomy assistant focused on ginger (Zingiber officinale). "
             "Give short, practical answers with bullet points when useful. "
@@ -999,39 +965,40 @@ def api_chat():
             "Never invent measurements; if unknown, say so."
         )
 
-        # Build the Gemini-style message list
-        # We’ll prepend a system message and then the user/assistant turns sent by the client.
-        chat = [{"role":"system","content":system_prompt}]
+        chat = [{"role": "system", "content": system_prompt}]
         for m in msgs:
-            role = m.get("role","user")
+            role = (m.get("role") or "user").strip() or "user"
             content = (m.get("content") or "").strip()
             if content:
                 chat.append({"role": role, "content": content})
 
-        # Call Gemini (same lib as your gen_reason)
+        # Call Gemini safely
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            return jsonify({"ok": False, "message": "Gemini API key not configured."}), 500
+            return jsonify({"ok": False, "message": "Gemini API key not configured."}), 200
 
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-2.0-flash")
 
-        # Turn our list into a single prompt (Gemini Python chat API also supports histories,
-        # but this keeps the server stateless—history stays on client).
-        prompt = ""
-        for turn in chat:
-            tag = turn["role"].upper()
-            prompt += f"\n\n[{tag}]\n{turn['content']}"
-        prompt += "\n\n[ASSISTANT]\n"
+            # Collapse conversation to a prompt
+            prompt = ""
+            for turn in chat:
+                tag = (turn.get("role") or "user").upper()
+                prompt += f"\n\n[{tag}]\n{turn.get('content','')}"
+            prompt += "\n\n[ASSISTANT]\n"
 
-        resp = model.generate_content(prompt)
-        text = (resp.text or "").strip()
-
-        return jsonify({"ok": True, "reply": text})
+            resp = model.generate_content(prompt)
+            text = (getattr(resp, "text", "") or "").strip()
+            if not text:
+                return jsonify({"ok": False, "message": "Empty response from model."}), 200
+            return jsonify({"ok": True, "reply": text}), 200
+        except Exception as e:
+            return jsonify({"ok": False, "message": f"Model error: {e}"}), 200
 
     except Exception as e:
-        return jsonify({"ok": False, "message": str(e)}), 500
+        return jsonify({"ok": False, "message": f"Server error: {e}"}), 200
     
 def _haversine_m(lat1, lon1, lat2, lon2):
     from math import radians, sin, cos, asin, sqrt

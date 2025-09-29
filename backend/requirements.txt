@@ -8,3 +8,5 @@ torch>=2.1
 torchvision>=0.16
 ultralytics>=8.2.0
 numpy>=1.24
+requests>=2.31.0
+google-generativeai>=0.7.2
