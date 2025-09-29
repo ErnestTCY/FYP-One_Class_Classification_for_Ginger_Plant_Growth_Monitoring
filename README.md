@@ -48,8 +48,7 @@ OCC_Ginger/
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/OCC_Ginger.git
-cd OCC_Ginger
+git clone https://github.com/ErnestTCY/FYP-One_Class_Classification_for_Ginger_Plant_growth_monitoring.git
 ```
 
 ### Step 2: Create Virtual Environment
