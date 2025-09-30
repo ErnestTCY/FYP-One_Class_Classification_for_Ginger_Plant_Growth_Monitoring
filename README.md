@@ -1,6 +1,7 @@
 # OCC Ginger - Plant Growth Monitoring System
 
 An AI-powered system for monitoring ginger plant growth using computer vision and machine learning. This system provides automated detection, analysis, and reporting capabilities for ginger plant cultivation across different growth phases.
+![Monitoring System](Images/Monitoring_System.png)
 
 ## 🌱 Features
 
@@ -29,6 +30,7 @@ OCC_Ginger/
 │   ├── uploads/            # Original uploaded images
 │   ├── results/            # Annotated detection results
 │   └── artifacts/          # Generated reports and artifacts
+│   └──.env                 # Store Credentials and Path Details
 ├── web/                    # Frontend web application
 │   ├── web_app.py         # Flask web server
 │   ├── templates/         # HTML templates
