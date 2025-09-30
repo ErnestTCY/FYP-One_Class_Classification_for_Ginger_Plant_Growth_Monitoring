@@ -85,7 +85,6 @@ Create a `.env` file in the `backend/` directory:
 ```env (Create a .env file inside the /backend directory)
 # Database Configuration
 DATABASE_URL=sqlite:///ginger_occ.db
-SECRET_KEY=your-secret-key-here
 
 # AI Model Configuration
 YOLO_WEIGHTS=models/yolo_ginger_bag.pt
