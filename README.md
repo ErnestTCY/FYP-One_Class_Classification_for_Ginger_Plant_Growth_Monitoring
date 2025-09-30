@@ -133,18 +133,33 @@ python RelationalNet/Relational_Train.py \
 
 The training results are visualized in the `/Images` directory:
 
-### Few-Shot Learning Results
+### Selected Models Accuracy
 
-The `*shots.png` files show the chosen support samples from the MAML network for each growth phase:
+The following images show the accuracy results for the selected models across different growth phases:
 
-- **VG_4shots.png**: 4-shot examples from Vegetative Growth phase
-- **BP_5shots.png**: 5-shot examples from Bulking Phase  
-- **RM_3shots.png**: 3-shot examples from Rhizome Maturation phase
+#### Vegetative Growth Phase (VG)
+![VG 4-Shot Results](Images/VG_4shots.png)
+*4-shot examples from Vegetative Growth phase showing selected model accuracy*
 
-### Performance Metrics
+#### Bulking Phase (BP)
+![BP 5-Shot Results](Images/BP_5shots.png)
+*5-shot examples from Bulking Phase showing selected model accuracy*
 
-- **ROC(AUC).png**: Receiver Operating Characteristic curves showing Area Under Curve
-- **PR.png**: Precision-Recall curves for anomaly detection performance
+#### Rhizome Maturation Phase (RM)
+![RM 3-Shot Results](Images/RM_3shots.png)
+*3-shot examples from Rhizome Maturation phase showing selected model accuracy*
+
+### Performance Metrics for All Models
+
+The following visualizations show the overall performance metrics across all models:
+
+#### ROC (AUC) Curves
+![ROC AUC Curves](Images/ROC(AUC).png)
+*Receiver Operating Characteristic curves showing Area Under Curve for all models*
+
+#### Precision-Recall Curves
+![Precision-Recall Curves](Images/PR.png)
+*Precision-Recall curves for anomaly detection performance across all models*
 
 ## Model Architecture
 
