@@ -6,8 +6,7 @@
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/AI_Training.git
-cd AI_Training
+git clone https://github.com/ErnestTCY/FYP-One_Class_Classification_for_Ginger_Plant_Growth_Monitoring.git
 ```
 
 ### Install Dependencies
